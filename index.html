@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meeting App Logic Monitor</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 2rem; background: #fdfdfd; color: #333; }
+        h1 { border-bottom: 2px solid #eee; padding-bottom: 0.5rem; }
+        #logs { font-family: 'Courier New', Courier, monospace; background: #1e1e1e; color: #eee; padding: 1rem; border-radius: 8px; height: 600px; overflow-y: auto; display: flex; flex-direction: column-reverse; }
+        .log-entry { padding: 4px 0; border-bottom: 1px solid #333; }
+        .timestamp { color: #888; margin-right: 10px; }
+        .type-update { color: #4CAF50; font-weight: bold; }
+        .type-gps { color: #2196F3; font-weight: bold; }
+        .status-connected { color: green; }
+        .status-disconnected { color: red; }
+    </style>
+</head>
+<body>
+    <h1>Live Event Monitor <span id="status" class="status-disconnected">●</span></h1>
+    <div id="logs"></div>
+
+    <script>
+        const logContainer = document.getElementById('logs');
+        const statusIndicator = document.getElementById('status');
+        
+        function addLog(type, message) {
+            const div = document.createElement('div');
+            div.className = 'log-entry';
+            const time = new Date().toLocaleTimeString();
+            div.innerHTML = `<span class="timestamp">[${time}]</span> <span class="type-${type}">${type.toUpperCase()}</span>: ${message}`;
+            logContainer.prepend(div);
+        }
+
+        const evtSource = new EventSource("/events");
+
+        evtSource.onmessage = function(event) {
+            try {
+                const data = JSON.parse(event.data);
+                addLog(data.type, data.message);
+            } catch (e) {
+                addLog('system', event.data);
+            }
+        };
+
+        evtSource.onopen = function() {
+            statusIndicator.className = 'status-connected';
+            addLog('system', 'Connected to event stream.');
+        };
+
+        evtSource.onerror = function() {
+            statusIndicator.className = 'status-disconnected';
+            addLog('system', 'Connection lost. Reconnecting...');
+        };
+    </script>
+</body>
+</html>

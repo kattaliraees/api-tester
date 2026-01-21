@@ -1,6 +1,8 @@
 package main
 
 import (
+	_ "embed"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -11,6 +13,9 @@ import (
 	"sync"
 	"time"
 )
+
+//go:embed index.html
+var indexHTML []byte
 
 type DeviceState struct {
 	ID    string
@@ -23,12 +28,91 @@ type GPSLocation struct {
 	Lon float64
 }
 
+// SSE Event Structure
+type SSEMessage struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
+// Broker manages SSE clients
+type Broker struct {
+	Notifier       chan []byte
+	newClients     chan chan []byte
+	closingClients chan chan []byte
+	clients        map[chan []byte]bool
+}
+
+func NewBroker() *Broker {
+	broker := &Broker{
+		Notifier:       make(chan []byte, 1),
+		newClients:     make(chan chan []byte),
+		closingClients: make(chan chan []byte),
+		clients:        make(map[chan []byte]bool),
+	}
+	go broker.listen()
+	return broker
+}
+
+func (broker *Broker) listen() {
+	for {
+		select {
+		case s := <-broker.newClients:
+			broker.clients[s] = true
+			log.Printf("Client added. Total: %d", len(broker.clients))
+		case s := <-broker.closingClients:
+			delete(broker.clients, s)
+			log.Printf("Client removed. Total: %d", len(broker.clients))
+		case event := <-broker.Notifier:
+			for clientMessageChan := range broker.clients {
+				select {
+				case clientMessageChan <- event:
+				default:
+					// Drop message if client is blocked
+				}
+			}
+		}
+	}
+}
+
+func (broker *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	messageChan := make(chan []byte)
+	broker.newClients <- messageChan
+
+	defer func() {
+		broker.closingClients <- messageChan
+	}()
+
+	notify := r.Context().Done()
+
+	for {
+		select {
+		case <-notify:
+			return
+		case msg := <-messageChan:
+			fmt.Fprintf(w, "data: %s\n\n", msg)
+			w.(http.Flusher).Flush()
+		}
+	}
+}
+
 var (
 	gpsLocations = make(map[string]GPSLocation)
 	gpsMutex     sync.Mutex
 	devices      = make(map[string]bool)
 	mutex        sync.Mutex
+	broker       *Broker
 )
+
+func broadcast(msgType, msgContent string) {
+	msg := SSEMessage{Type: msgType, Message: msgContent}
+	jsonMsg, _ := json.Marshal(msg)
+	broker.Notifier <- jsonMsg
+}
 
 func gpsHandler(w http.ResponseWriter, r *http.Request) {
 	// log.Printf("Received GPS request: %v", r.URL.Query())
@@ -57,7 +141,9 @@ func gpsHandler(w http.ResponseWriter, r *http.Request) {
 	gpsLocations[id] = GPSLocation{ID: id, Lat: lat, Lon: lon}
 	gpsMutex.Unlock()
 
-	log.Printf("GPS Update: Device %s at %.6f, %.6f\n", id, lat, lon)
+	logMsg := fmt.Sprintf("Device %s at %.6f, %.6f", id, lat, lon)
+	log.Println("GPS Update:", logMsg)
+	broadcast("gps", logMsg)
 
 	fmt.Fprintf(w, "GPS updated for %s: %.6f, %.6f\n", id, lat, lon)
 }
@@ -87,7 +173,9 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	devices[id] = parsed
 	mutex.Unlock()
 
-	log.Printf("Device %s -> %v\n", id, parsed)
+	logMsg := fmt.Sprintf("Device %s -> %v", id, parsed)
+	log.Println(logMsg)
+	broadcast("update", logMsg)
 
 	fmt.Fprintf(w, "Device %s set to %v\n", id, parsed)
 }
@@ -95,12 +183,11 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 func getOutboundIP() net.IP {
 	conn, err := net.Dial("udp", "8.8.8.8:80")
 	if err != nil {
-		log.Fatal(err)
+		// Fallback if no internet
+		return net.IPv4(127, 0, 0, 1)
 	}
 	defer conn.Close()
-
 	localAddr := conn.LocalAddr().(*net.UDPAddr)
-
 	return localAddr.IP
 }
 
@@ -116,8 +203,17 @@ func main() {
 	log.SetOutput(wrt)
 	log.SetFlags(log.LstdFlags)
 
+	broker = NewBroker()
+
 	http.HandleFunc("/update", updateHandler)
 	http.HandleFunc("/gps", gpsHandler)
+	http.Handle("/events", broker)
+	
+	// Serve embedded index.html at root
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write(indexHTML)
+	})
 
 	ip := getOutboundIP()
 	log.Printf("Server running on %s:8080\n", ip.String())
