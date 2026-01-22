@@ -141,8 +141,8 @@ func gpsHandler(w http.ResponseWriter, r *http.Request) {
 	gpsLocations[id] = GPSLocation{ID: id, Lat: lat, Lon: lon}
 	gpsMutex.Unlock()
 
-	logMsg := fmt.Sprintf("Device %s at %.6f, %.6f", id, lat, lon)
-	log.Println("GPS Update:", logMsg)
+	logMsg := fmt.Sprintf("Location update received for %s %.6f, %.6f", id, lat, lon)
+	log.Println(logMsg)
 	broadcast("gps", logMsg)
 
 	fmt.Fprintf(w, "GPS updated for %s: %.6f, %.6f\n", id, lat, lon)
@@ -173,7 +173,12 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	devices[id] = parsed
 	mutex.Unlock()
 
-	logMsg := fmt.Sprintf("Device %s -> %v", id, parsed)
+	var logMsg string
+	if parsed {
+		logMsg = fmt.Sprintf("Attendance registered for %s", id)
+	} else {
+		logMsg = fmt.Sprintf("Attendance unregistered for %s", id)
+	}
 	log.Println(logMsg)
 	broadcast("update", logMsg)
 
@@ -208,7 +213,7 @@ func main() {
 	http.HandleFunc("/update", updateHandler)
 	http.HandleFunc("/gps", gpsHandler)
 	http.Handle("/events", broker)
-	
+
 	// Serve embedded index.html at root
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
