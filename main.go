@@ -34,6 +34,23 @@ type SSEMessage struct {
 	Message string `json:"message"`
 }
 
+// History
+var (
+	history      []SSEMessage
+	historyMutex sync.Mutex
+	maxHistory   = 1000
+)
+
+func addToHistory(msg SSEMessage) {
+	historyMutex.Lock()
+	defer historyMutex.Unlock()
+
+	history = append(history, msg)
+	if len(history) > maxHistory {
+		history = history[1:]
+	}
+}
+
 // Broker manages SSE clients
 type Broker struct {
 	Notifier       chan []byte
@@ -110,8 +127,19 @@ var (
 
 func broadcast(msgType, msgContent string) {
 	msg := SSEMessage{Type: msgType, Message: msgContent}
+	addToHistory(msg)
 	jsonMsg, _ := json.Marshal(msg)
 	broker.Notifier <- jsonMsg
+}
+
+func historyHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	historyMutex.Lock()
+	defer historyMutex.Unlock()
+
+	json.NewEncoder(w).Encode(history)
 }
 
 func gpsHandler(w http.ResponseWriter, r *http.Request) {
@@ -212,6 +240,7 @@ func main() {
 
 	http.HandleFunc("/update", updateHandler)
 	http.HandleFunc("/gps", gpsHandler)
+	http.HandleFunc("/history", historyHandler)
 	http.Handle("/events", broker)
 
 	// Serve embedded index.html at root
