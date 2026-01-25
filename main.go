@@ -142,6 +142,18 @@ func historyHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(history)
 }
 
+func clearHandler(w http.ResponseWriter, r *http.Request) {
+	historyMutex.Lock()
+	history = []SSEMessage{}
+	historyMutex.Unlock()
+
+	log.Println("History cleared")
+	broadcast("clear", "Logs cleared")
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("Cleared"))
+}
+
 func gpsHandler(w http.ResponseWriter, r *http.Request) {
 	// log.Printf("Received GPS request: %v", r.URL.Query())
 	id := r.URL.Query().Get("id")
@@ -241,6 +253,7 @@ func main() {
 	http.HandleFunc("/update", updateHandler)
 	http.HandleFunc("/gps", gpsHandler)
 	http.HandleFunc("/history", historyHandler)
+	http.HandleFunc("/clear", clearHandler)
 	http.Handle("/events", broker)
 
 	// Serve embedded index.html at root

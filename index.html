@@ -18,13 +18,39 @@
             padding-bottom: 0.5rem;
         }
 
-        #logs {
+        .status-disconnected {
+            color: red;
+        }
+
+        .split-view-container {
+            display: flex;
+            gap: 1rem;
+            height: 600px;
+        }
+
+        .log-column {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .column-header {
+            font-weight: bold;
+            margin-bottom: 0.5rem;
+            color: #555;
+            text-transform: uppercase;
+            font-size: 0.9rem;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 4px;
+        }
+
+        .log-scroll-area {
             font-family: 'Courier New', Courier, monospace;
             background: #1e1e1e;
             color: #eee;
             padding: 1rem;
             border-radius: 8px;
-            height: 600px;
+            flex: 1;
             overflow-y: auto;
             display: flex;
             flex-direction: column-reverse;
@@ -57,62 +83,138 @@
         .status-disconnected {
             color: red;
         }
+
+        .header-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        h1 {
+            border-bottom: none;
+            margin: 0;
+            padding: 0;
+        }
+
+        .btn-clear {
+            background-color: #f44336;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 14px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+
+        .btn-clear:hover {
+            background-color: #d32f2f;
+        }
     </style>
 </head>
 
 <body>
-    <h1>Live Event Monitor <span id="status" class="status-disconnected">●</span></h1>
-    <div id="logs"></div>
 
-    <script>
-        const logContainer = document.getElementById('logs');
-        const statusIndicator = document.getElementById('status');
+    <body>
+        <div class="header-container">
+            <h1>Live Event Monitor <span id="status" class="status-disconnected">●</span></h1>
+            <button class="btn-clear" onclick="clearLogs()">Clear Logs</button>
+        </div>
+        <div class="split-view-container">
+            <div class="log-column">
+                <div class="column-header">Attendance & Updates</div>
+                <div id="logs-attendance" class="log-scroll-area"></div>
+            </div>
+            <div class="log-column">
+                <div class="column-header">GPS Tracking</div>
+                <div id="logs-gps" class="log-scroll-area"></div>
+            </div>
+        </div>
 
-        function addLog(type, message) {
-            const div = document.createElement('div');
-            div.className = 'log-entry';
-            const time = new Date().toLocaleTimeString();
-            div.innerHTML = `<span class="timestamp">[${time}]</span> <span class="type-${type}">${type.toUpperCase()}</span>: ${message}`;
-            logContainer.prepend(div);
-        }
+        <script>
+            const logsAttendance = document.getElementById('logs-attendance');
+            const logsGPS = document.getElementById('logs-gps');
+            const statusIndicator = document.getElementById('status');
 
-        const evtSource = new EventSource("/events");
+            function addLog(type, message) {
+                const div = document.createElement('div');
+                div.className = 'log-entry';
+                const time = new Date().toLocaleTimeString();
+                div.innerHTML = `<span class="timestamp">[${time}]</span> <span class="type-${type}">${type.toUpperCase()}</span>: ${message}`;
 
-        evtSource.onmessage = function (event) {
-            try {
-                const data = JSON.parse(event.data);
-                addLog(data.type, data.message);
-            } catch (e) {
-                addLog('system', event.data);
+                if (type === 'gps') {
+                    logsGPS.prepend(div);
+                } else {
+                    // 'update', 'system', and any others go to attendance/main log
+                    logsAttendance.prepend(div);
+                }
             }
-        };
 
-        evtSource.onopen = function () {
-            statusIndicator.className = 'status-connected';
-            addLog('system', 'Connected to event stream.');
-        };
+            const evtSource = new EventSource("/events");
 
-        evtSource.onerror = function () {
-            statusIndicator.className = 'status-disconnected';
-            addLog('system', 'Connection lost. Reconnecting...');
-        };
+            evtSource.onmessage = function (event) {
+                try {
+                    const data = JSON.parse(event.data);
 
-        function fetchHistory() {
-            fetch('/history')
-                .then(response => response.json())
-                .then(data => {
-                    if (data) {
-                        data.forEach(item => {
-                            addLog(item.type, item.message);
-                        });
+                    if (data.type === 'clear') {
+                        logsAttendance.innerHTML = '';
+                        logsGPS.innerHTML = '';
+                        return;
                     }
-                })
-                .catch(err => console.error('Error fetching history:', err));
-        }
 
-        // Fetch history immediately
-        fetchHistory();
-    </script>
-</body>
+                    addLog(data.type, data.message);
+                } catch (e) {
+                    addLog('system', event.data);
+                }
+            };
+
+            function clearLogs() {
+                if (!confirm("Are you sure you want to clear all logs?")) return;
+
+                fetch('/clear')
+                    .then(response => {
+                        if (response.ok) {
+                            console.log("Logs cleared on server");
+                            // The 'clear' SSE event will clear the UI
+                        } else {
+                            alert("Failed to clear logs");
+                        }
+                    })
+                    .catch(err => console.error("Error clearing logs:", err));
+            }
+
+            evtSource.onopen = function () {
+                statusIndicator.className = 'status-connected';
+                addLog('system', 'Connected to event stream.');
+            };
+
+            evtSource.onerror = function () {
+                statusIndicator.className = 'status-disconnected';
+                addLog('system', 'Connection lost. Reconnecting...');
+            };
+
+            function fetchHistory() {
+                fetch('/history')
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data) {
+                            data.forEach(item => {
+                                addLog(item.type, item.message);
+                            });
+                        }
+                    })
+                    .catch(err => console.error('Error fetching history:', err));
+            }
+
+            // Fetch history immediately
+            fetchHistory();
+        </script>
+    </body>
 
 </html>
